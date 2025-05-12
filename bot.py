@@ -22,7 +22,7 @@ is_speaking = False
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn -b:a 320k -ar 48000 -ac 2 -f pcm_s16le'
+    'options': '-vn -b:a 192k -ar 48000 -ac 2'
 }
 
 @bot.event
@@ -55,47 +55,40 @@ async def play(ctx, url: str):
 
         ydl_opts = {
             'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '320',
-            }],
-            'outtmpl': 'downloads/%(id)s.%(ext)s',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'default_search': 'ytsearch',
         }
 
-        os.makedirs("downloads", exist_ok=True)
+        # ถ้าไม่ใช่ลิงก์ YouTube ให้ใช้ ytsearch
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = f"ytsearch:{url}"
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
+            info = ydl.extract_info(url, download=False)
+            if 'entries' in info:
+                info = info['entries'][0]
+
+            stream_url = info['url']
             title = info.get('title', 'ไม่ทราบชื่อเพลง')
 
-            if not filename.endswith(".mp3"):
-                filename = os.path.splitext(filename)[0] + ".mp3"
-
-        # ส่งข้อความแจ้งเตือนการเล่นเพลง
         message = await ctx.send(f"🎶 กำลังเล่น: **{title}**")
 
-        # เพิ่มเพลงในคิว
-        await speak_queue.put((ctx, filename))
+        await speak_queue.put((ctx, stream_url))
         await process_queue()
 
-        # ลบข้อความหลังจากเล่นเสร็จ
-        await message.delete()
     else:
         await ctx.send("คุณต้องอยู่ใน voice channel ก่อนครับ")
 
 @bot.command()
 async def stop(ctx):
     if ctx.voice_client:
+        await ctx.message.delete()
         ctx.voice_client.stop()
 
         if not speak_queue.empty():
             await process_queue()
-        else:
-            await ctx.send("ไม่มีกำหนดการเล่นเสียงแล้วครับ")
-    else:
-        await ctx.send("บอทยังไม่ได้เล่นเสียงครับ")
 
 async def process_queue():
     global is_speaking
@@ -106,29 +99,20 @@ async def process_queue():
     while not speak_queue.empty():
         ctx, item = await speak_queue.get()
 
-        if isinstance(item, str) and item.endswith(".mp3") and os.path.exists(item):
-            await play_audio_from_queue(ctx, item)
+        if isinstance(item, str) and (item.startswith("http://") or item.startswith("https://")):
+            await play_stream(ctx, item)
         else:
             await speak_text(ctx, item)
-
-    if speak_queue.empty():
-        await ctx.send("ไม่มีเสียงในคิวครับ.")
         
     is_speaking = False
 
-async def play_audio_from_queue(ctx, audio_file):
+async def play_stream(ctx, stream_url):
     if ctx.voice_client:
         ctx.voice_client.stop()
-        ctx.voice_client.play(discord.FFmpegPCMAudio(audio_file))
+        ctx.voice_client.play(discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS))
 
         while ctx.voice_client.is_playing():
             await asyncio.sleep(1)
-
-        if os.path.exists(audio_file):
-            try:
-                os.remove(audio_file)
-            except Exception as e:
-                print(f"ลบไฟล์ {audio_file} ไม่สำเร็จ: {e}")
 
 async def speak_text(ctx, text):
     if ctx.voice_client:
