@@ -17,13 +17,20 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-speak_queue = asyncio.Queue()
-is_speaking = False
-
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn -b:a 192k -ar 48000 -ac 2'
 }
+
+# Dictionary แยกตาม guild.id
+guild_queues = {}
+guild_speaking_flags = {}
+
+def get_queue(guild_id):
+    if guild_id not in guild_queues:
+        guild_queues[guild_id] = asyncio.Queue()
+        guild_speaking_flags[guild_id] = False
+    return guild_queues[guild_id]
 
 @bot.event
 async def on_ready():
@@ -42,8 +49,9 @@ async def leave(ctx):
 @bot.command()
 async def say(ctx, *, text):
     await ctx.message.delete()
-    await speak_queue.put((ctx, text))
-    await process_queue()
+    queue = get_queue(ctx.guild.id)
+    await queue.put((ctx, text))
+    await process_queue(ctx.guild.id)
 
 @bot.command()
 async def play(ctx, url: str):
@@ -61,7 +69,6 @@ async def play(ctx, url: str):
             'default_search': 'ytsearch',
         }
 
-        # ถ้าไม่ใช่ลิงก์ YouTube ให้ใช้ ytsearch
         if not (url.startswith("http://") or url.startswith("https://")):
             url = f"ytsearch:{url}"
 
@@ -72,12 +79,13 @@ async def play(ctx, url: str):
 
             stream_url = info['url']
             title = info.get('title', 'ไม่ทราบชื่อเพลง')
+            webpage_url = info.get('webpage_url', url)
 
-        message = await ctx.send(f"🎶 กำลังเล่น: **{title}**")
+        await ctx.send(f"🎶 กำลังเล่น: [{title}]({webpage_url})")
 
-        await speak_queue.put((ctx, stream_url))
-        await process_queue()
-
+        queue = get_queue(ctx.guild.id)
+        await queue.put((ctx, stream_url))
+        await process_queue(ctx.guild.id)
     else:
         await ctx.send("คุณต้องอยู่ใน voice channel ก่อนครับ")
 
@@ -87,24 +95,25 @@ async def stop(ctx):
         await ctx.message.delete()
         ctx.voice_client.stop()
 
-        if not speak_queue.empty():
-            await process_queue()
+        queue = get_queue(ctx.guild.id)
+        if not queue.empty():
+            await process_queue(ctx.guild.id)
 
-async def process_queue():
-    global is_speaking
-    if is_speaking:
+async def process_queue(guild_id):
+    queue = get_queue(guild_id)
+    if guild_speaking_flags[guild_id]:
         return
 
-    is_speaking = True
-    while not speak_queue.empty():
-        ctx, item = await speak_queue.get()
+    guild_speaking_flags[guild_id] = True
+    while not queue.empty():
+        ctx, item = await queue.get()
 
         if isinstance(item, str) and (item.startswith("http://") or item.startswith("https://")):
             await play_stream(ctx, item)
         else:
             await speak_text(ctx, item)
-        
-    is_speaking = False
+
+    guild_speaking_flags[guild_id] = False
 
 async def play_stream(ctx, stream_url):
     if ctx.voice_client:
@@ -149,10 +158,11 @@ async def on_message(message):
             except discord.errors.Forbidden:
                 await message.channel.send("ผมไม่มีสิทธิ์ลบข้อความ 😥")
 
-            await speak_queue.put((ctx, message.content))
-            await process_queue()
+            queue = get_queue(ctx.guild.id)
+            await queue.put((ctx, message.content))
+            await process_queue(ctx.guild.id)
         else:
             await message.channel.send("บอทยังไม่ได้ join voice channel ใช้ `!join` ก่อนนะ")
 
-# ดึง Token จาก .env
+# รันบอท
 bot.run(os.getenv("DISCORD_TOKEN"))
