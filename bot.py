@@ -126,21 +126,28 @@ async def play_stream(ctx, stream_url):
 async def speak_text(ctx, text):
     if ctx.voice_client:
         filename = "tts.mp3"
-        tts = gTTS(text=text, lang='th', slow=False)
-        tts.save(filename)
-        ctx.voice_client.stop()
-        ctx.voice_client.play(discord.FFmpegPCMAudio(filename))
+        try:
+            tts = gTTS(text=text, lang='th', slow=False)
+            tts.save(filename)
+            ctx.voice_client.stop()
+            ctx.voice_client.play(discord.FFmpegPCMAudio(filename))
 
-        while ctx.voice_client.is_playing():
-            await asyncio.sleep(0.5)
+            while ctx.voice_client.is_playing():
+                await asyncio.sleep(0.5)
 
-        if os.path.exists(filename):
-            try:
-                os.remove(filename)
-            except Exception as e:
-                print(f"ลบไฟล์ {filename} ไม่สำเร็จ: {e}")
+        except Exception as e:
+            print(f"[speak_text] ข้อผิดพลาด: {e}")
+        finally:
+            if os.path.exists(filename):
+                try:
+                    os.remove(filename)
+                except Exception as e:
+                    print(f"ลบไฟล์ {filename} ไม่สำเร็จ: {e}")
     else:
-        await ctx.send("บอทยังไม่ได้ join voice channel")
+        try:
+            await ctx.send("บอทยังไม่ได้ join voice channel")
+        except:
+            pass
 
 @bot.event
 async def on_message(message):
